@@ -19,8 +19,21 @@ TMP_FILE=$(mktemp -p "" "rmminstall_XXXXXXXXXX")
 curl -s -L "${SCRIPT_URL}" > ${TMP_FILE}
 NEW_VER=$(grep "^SCRIPT_VERSION" "$TMP_FILE" | awk -F'[="]' '{print $3}')
 
+if [ "${SCRIPT_VERSION}" -ne "${NEW_VER}" ]; then
+    printf >&2 "${YELLOW}Old install script detected, downloading and replacing with the latest version...${NC}\n"
+    wget -q "${SCRIPT_URL}" -O install.sh
+    printf >&2 "${YELLOW}Script updated! Please re-run ./install.sh${NC}\n"
+    rm -f $TMP_FILE
+    exit 1
+fi
 
 rm -f $TMP_FILE
+
+arch=$(uname -m)
+if [ "$arch" != "x86_64" ]; then
+  echo -ne "${RED}ERROR: Only x86_64 arch is supported, not ${arch}${NC}\n"
+  exit 1
+fi
 
 
 osname=$(lsb_release -si); osname=${osname^}
@@ -31,8 +44,21 @@ relno=$(lsb_release -sr | cut -d. -f1)
 fullrelno=$(lsb_release -sr)
 
 # Fallback if lsb_release -si returns anything else than Ubuntu, Debian or Raspbian
+if [ ! "$osname" = "ubuntu" ] && [ ! "$osname" = "debian" ]; then
+  osname=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
+  osname=${osname^}
+fi
 
 
+# determine system
+if ([ "$osname" = "ubuntu" ] && [ "$fullrelno" = "20.04" ]) || ([ "$osname" = "debian" ] && [ $relno -ge 10 ]); then
+  echo $fullrel
+else
+ echo $fullrel
+ echo -ne "${RED}Supported versions: Ubuntu 20.04, Debian 10 and 11\n"
+ echo -ne "Your system does not appear to be supported${NC}\n"
+ exit 1
+fi
 
 if [ $EUID -eq 0 ]; then
   echo -ne "${RED}Do NOT run this script as root. Exiting.${NC}\n"
@@ -173,11 +199,9 @@ user www-data;
 worker_processes auto;
 pid /run/nginx.pid;
 include /etc/nginx/modules-enabled/*.conf;
-
 events {
         worker_connections 4096;
 }
-
 http {
         sendfile on;
         tcp_nopush on;
@@ -343,17 +367,12 @@ echo "${meshcfg}" > /meshcentral/meshcentral-data/config.json
 
 localvars="$(cat << EOF
 SECRET_KEY = "${DJANGO_SEKRET}"
-
 DEBUG = False
-
 ALLOWED_HOSTS = ['${rmmdomain}']
-
 ADMIN_URL = "${ADMINURL}/"
-
 CORS_ORIGIN_WHITELIST = [
     "https://${frontenddomain}"
 ]
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -364,7 +383,6 @@ DATABASES = {
         'PORT': '5432',
     }
 }
-
 MESH_USERNAME = "${meshusername}"
 MESH_SITE = "https://${meshdomain}"
 REDIS_HOST    = "localhost"
@@ -415,7 +433,6 @@ rmmservice="$(cat << EOF
 [Unit]
 Description=tacticalrmm uwsgi daemon
 After=network.target postgresql.service
-
 [Service]
 User=${USER}
 Group=www-data
@@ -424,7 +441,6 @@ Environment="PATH=/rmm/api/env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr
 ExecStart=/rmm/api/env/bin/uwsgi --ini app.ini
 Restart=always
 RestartSec=10s
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -435,7 +451,6 @@ daphneservice="$(cat << EOF
 [Unit]
 Description=django channels daemon v2
 After=network.target
-
 [Service]
 User=${USER}
 Group=www-data
@@ -446,7 +461,6 @@ ExecStartPre=rm -f /rmm/daphne.sock
 ExecStartPre=rm -f /rmm/daphne.sock.lock
 Restart=always
 RestartSec=3s
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -457,7 +471,6 @@ natsservice="$(cat << EOF
 [Unit]
 Description=NATS Server
 After=network.target
-
 [Service]
 PrivateTmp=true
 Type=simple
@@ -469,7 +482,6 @@ Group=www-data
 Restart=always
 RestartSec=5s
 LimitNOFILE=1000000
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -480,7 +492,6 @@ natsapi="$(cat << EOF
 [Unit]
 Description=TacticalRMM Nats Api v1
 After=nats.service
-
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/nats-api
@@ -488,7 +499,6 @@ User=${USER}
 Group=${USER}
 Restart=always
 RestartSec=5s
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -497,24 +507,20 @@ echo "${natsapi}" | sudo tee /etc/systemd/system/nats-api.service > /dev/null
 
 nginxrmm="$(cat << EOF
 server_tokens off;
-
 upstream tacticalrmm {
     server unix:////rmm/api/tacticalrmm/tacticalrmm.sock;
 }
-
 map \$http_user_agent \$ignore_ua {
     "~python-requests.*" 0;
     "~go-resty.*" 0;
     default 1;
 }
-
 server {
     listen 80;
     listen [::]:80;
     server_name ${rmmdomain};
     return 301 https://\$server_name\$request_uri;
 }
-
 server {
     listen 443 ssl reuseport;
     listen [::]:443 ssl;
@@ -536,31 +542,25 @@ server {
     location /static/ {
         root /rmm/api/tacticalrmm;
     }
-
     location /private/ {
         internal;
         add_header "Access-Control-Allow-Origin" "https://${frontenddomain}";
         alias /rmm/api/tacticalrmm/tacticalrmm/private/;
     }
-
     location ~ ^/ws/ {
         proxy_pass http://unix:/rmm/daphne.sock;
-
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-
         proxy_redirect     off;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Host \$server_name;
     }
-
     location ~ ^/natsws {
         proxy_pass http://127.0.0.1:9235;
         proxy_http_version 1.1;
-
         proxy_set_header Host \$host;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -568,7 +568,6 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
-
     location / {
         uwsgi_pass  tacticalrmm;
         include     /etc/nginx/uwsgi_params;
@@ -588,9 +587,7 @@ server {
   server_name ${meshdomain};
   return 301 https://\$server_name\$request_uri;
 }
-
 server {
-
     listen 443 ssl;
     listen [::]:443 ssl;
     proxy_send_timeout 330s;
@@ -598,9 +595,7 @@ server {
     server_name ${meshdomain};
     ssl_certificate ${CERT_PUB_KEY};
     ssl_certificate_key ${CERT_PRIV_KEY};
-
     ssl_session_cache shared:WEBSSL:10m;
-
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers on;
     ssl_ciphers EECDH+AESGCM:EDH+AESGCM;
@@ -608,11 +603,9 @@ server {
     ssl_stapling on;
     ssl_stapling_verify on;
     add_header X-Content-Type-Options nosniff;
-
     location / {
         proxy_pass http://127.0.0.1:4430/;
         proxy_http_version 1.1;
-
         proxy_set_header Host \$host;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -634,7 +627,6 @@ celeryservice="$(cat << EOF
 [Unit]
 Description=Celery Service V2
 After=network.target redis-server.service postgresql.service
-
 [Service]
 Type=forking
 User=${USER}
@@ -646,7 +638,6 @@ ExecStop=/bin/sh -c '\${CELERY_BIN} multi stopwait \$CELERYD_NODES --pidfile=\${
 ExecReload=/bin/sh -c '\${CELERY_BIN} -A \$CELERY_APP multi restart \$CELERYD_NODES --pidfile=\${CELERYD_PID_FILE} --logfile=\${CELERYD_LOG_FILE} --loglevel="\${CELERYD_LOG_LEVEL}" \$CELERYD_OPTS'
 Restart=always
 RestartSec=10s
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -655,19 +646,13 @@ echo "${celeryservice}" | sudo tee /etc/systemd/system/celery.service > /dev/nul
 
 celeryconf="$(cat << EOF
 CELERYD_NODES="w1"
-
 CELERY_BIN="/rmm/api/env/bin/celery"
-
 CELERY_APP="tacticalrmm"
-
 CELERYD_MULTI="multi"
-
 CELERYD_OPTS="--time-limit=86400 --autoscale=20,2"
-
 CELERYD_PID_FILE="/rmm/api/tacticalrmm/%n.pid"
 CELERYD_LOG_FILE="/var/log/celery/%n%I.log"
 CELERYD_LOG_LEVEL="ERROR"
-
 CELERYBEAT_PID_FILE="/rmm/api/tacticalrmm/beat.pid"
 CELERYBEAT_LOG_FILE="/var/log/celery/beat.log"
 EOF
@@ -679,7 +664,6 @@ celerybeatservice="$(cat << EOF
 [Unit]
 Description=Celery Beat Service V2
 After=network.target redis-server.service postgresql.service
-
 [Service]
 Type=simple
 User=${USER}
@@ -689,7 +673,6 @@ WorkingDirectory=/rmm/api/tacticalrmm
 ExecStart=/bin/sh -c '\${CELERY_BIN} -A \${CELERY_APP} beat --pidfile=\${CELERYBEAT_PID_FILE} --logfile=\${CELERYBEAT_LOG_FILE} --loglevel=\${CELERYD_LOG_LEVEL}'
 Restart=always
 RestartSec=10s
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -712,7 +695,6 @@ User=${USER}
 Group=${USER}
 Restart=always
 RestartSec=10s
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -751,7 +733,6 @@ server {
     }
     error_log  /var/log/nginx/frontend-error.log;
     access_log /var/log/nginx/frontend-access.log;
-
     listen 443 ssl;
     listen [::]:443 ssl;
     ssl_certificate ${CERT_PUB_KEY};
@@ -765,12 +746,10 @@ server {
     ssl_stapling_verify on;
     add_header X-Content-Type-Options nosniff;
 }
-
 server {
     if (\$host = ${frontenddomain}) {
         return 301 https://\$host\$request_uri;
     }
-
     listen 80;
     listen [::]:80;
     server_name ${frontenddomain};
