@@ -44,15 +44,6 @@ if [ ! "$osname" = "ubuntu" ] && [ ! "$osname" = "debian" ]; then
 fi
 
 
-# determine system
-if ([ "$osname" = "ubuntu" ] && [ "$fullrelno" = "20.04" ]) || ([ "$osname" = "debian" ] && [ $relno -ge 10 ]); then
-  echo $fullrel
-else
- echo $fullrel
- echo -ne "${RED}Supported versions: Ubuntu 20.04, Debian 10 and 11\n"
- echo -ne "Your system does not appear to be supported${NC}\n"
- exit 1
-fi
 
 if [ $EUID -eq 0 ]; then
   echo -ne "${RED}Do NOT run this script as root. Exiting.${NC}\n"
